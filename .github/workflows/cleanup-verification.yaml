@@ -1,0 +1,108 @@
+name: 🧹 Repository Cleanup Verification
+
+on:
+  schedule:
+    # Run daily at midnight UTC to ensure no resources are accidentally running
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scripts/verify-cleanup.sh'
+
+jobs:
+  verify-cleanup:
+    name: Verify No Resources Running
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+      
+      - name: Verify Docker Clean
+        run: |
+          echo "🐳 Checking Docker resources..."
+          docker images
+          docker ps -a
+          
+          IMAGE_COUNT=$(docker images -q | wc -l)
+          CONTAINER_COUNT=$(docker ps -a -q | wc -l)
+          
+          if [ "$IMAGE_COUNT" -gt 0 ] || [ "$CONTAINER_COUNT" -gt 0 ]; then
+            echo "::error::Docker resources found! Images: $IMAGE_COUNT, Containers: $CONTAINER_COUNT"
+            exit 1
+          fi
+          echo "✅ Docker is clean"
+      
+      - name: Verify AWS Resources Clean
+        run: |
+          echo "☁️ Checking AWS resources..."
+          
+          # Check EKS clusters
+          EKS_COUNT=$(aws eks list-clusters --region us-east-1 --query 'clusters | length(@)' --output text)
+          echo "EKS Clusters: $EKS_COUNT"
+          
+          # Check EC2 instances
+          EC2_COUNT=$(aws ec2 describe-instances --region us-east-1 \
+            --filters "Name=instance-state-name,Values=running,pending,stopping,stopped" \
+            --query 'Reservations | length(@)' --output text)
+          echo "EC2 Instances: $EC2_COUNT"
+          
+          # Check Load Balancers
+          LB_COUNT=$(aws elbv2 describe-load-balancers --region us-east-1 \
+            --query 'LoadBalancers | length(@)' --output text)
+          echo "Load Balancers: $LB_COUNT"
+          
+          # Check NAT Gateways
+          NAT_COUNT=$(aws ec2 describe-nat-gateways --region us-east-1 \
+            --filter "Name=state,Values=available,pending" \
+            --query 'NatGateways | length(@)' --output text)
+          echo "NAT Gateways: $NAT_COUNT"
+          
+          # Check VPCs with project tags
+          VPC_COUNT=$(aws ec2 describe-vpcs --region us-east-1 \
+            --filters "Name=tag:Name,Values=*zero-downtime*" \
+            --query 'Vpcs | length(@)' --output text)
+          echo "Project VPCs: $VPC_COUNT"
+          
+          # Check ECR repositories
+          ECR_COUNT=$(aws ecr describe-repositories --region us-east-1 \
+            --query 'repositories[?contains(repositoryName, `demo-app`)] | length(@)' \
+            --output text 2>/dev/null || echo "0")
+          echo "ECR Repositories: $ECR_COUNT"
+          
+          # Fail if any resources found
+          if [ "$EKS_COUNT" -gt 0 ] || [ "$EC2_COUNT" -gt 0 ] || [ "$LB_COUNT" -gt 0 ] || \
+             [ "$NAT_COUNT" -gt 0 ] || [ "$VPC_COUNT" -gt 0 ] || [ "$ECR_COUNT" -gt 0 ]; then
+            echo "::error::AWS resources found!"
+            echo "::error::EKS: $EKS_COUNT, EC2: $EC2_COUNT, LB: $LB_COUNT, NAT: $NAT_COUNT, VPC: $VPC_COUNT, ECR: $ECR_COUNT"
+            exit 1
+          fi
+          
+          echo "✅ AWS is clean"
+      
+      - name: Run verification script
+        run: |
+          chmod +x scripts/verify-cleanup.sh
+          ./scripts/verify-cleanup.sh
+      
+      - name: Summary
+        if: success()
+        run: |
+          echo "✅ All verification checks passed!"
+          echo "📊 Monthly Cost: \$0.00"
+          echo "🎯 Repository Status: Clean"
+      
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::⚠️ Resources detected! Review the logs above."
+          echo "::error::This may result in unexpected AWS charges."

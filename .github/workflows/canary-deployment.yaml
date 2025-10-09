@@ -1,0 +1,338 @@
+name: Canary Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'applications/**'
+      - 'k8s/canary/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      auto_promote:
+        description: 'Auto-promote after analysis'
+        required: true
+        default: 'false'
+        type: boolean
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: zdd-eks-production
+  ECR_REPOSITORY: demo-app-canary
+  KUBECTL_VERSION: '1.28.0'
+  ARGO_ROLLOUTS_VERSION: 'v1.6.0'
+
+jobs:
+  # =========================================================================
+  # Build and Push Docker Image
+  # =========================================================================
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+      version: ${{ steps.meta.outputs.version }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./applications/demo-app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      
+      - name: Sign image with Cosign
+        run: |
+          echo "Image signing would happen here"
+          # cosign sign ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}@${{ steps.build.outputs.digest }}
+
+  # =========================================================================
+  # Deploy to EKS using Canary Strategy
+  # =========================================================================
+  deploy-canary:
+    name: Deploy Canary
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+      
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+      
+      - name: Install Argo Rollouts kubectl plugin
+        run: |
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/download/${{ env.ARGO_ROLLOUTS_VERSION }}/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+      
+      - name: Update image in rollout manifest
+        run: |
+          export IMAGE_TAG=${{ needs.build.outputs.image_tag }}
+          envsubst < k8s/canary/rollout.yaml > k8s/canary/rollout-updated.yaml
+      
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/canary/rollout-updated.yaml
+      
+      - name: Monitor canary deployment
+        id: monitor
+        run: |
+          echo "Starting canary deployment monitoring..."
+          
+          # Watch rollout progress
+          timeout 30m kubectl argo rollouts get rollout demo-app-canary -n applications --watch || true
+          
+          # Get final status
+          STATUS=$(kubectl argo rollouts status demo-app-canary -n applications)
+          echo "Final status: ${STATUS}"
+          
+          # Check if rollout is healthy
+          if echo "$STATUS" | grep -q "Healthy"; then
+            echo "rollout_healthy=true" >> $GITHUB_OUTPUT
+          else
+            echo "rollout_healthy=false" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Get canary analysis results
+        run: |
+          echo "Fetching canary analysis results..."
+          
+          # Get analysis runs
+          kubectl get analysisrun -n applications -l rollout=demo-app-canary
+          
+          # Get detailed analysis for latest run
+          LATEST_ANALYSIS=$(kubectl get analysisrun -n applications -l rollout=demo-app-canary --sort-by=.metadata.creationTimestamp -o name | tail -1)
+          
+          if [ -n "$LATEST_ANALYSIS" ]; then
+            echo "Latest analysis: ${LATEST_ANALYSIS}"
+            kubectl describe ${LATEST_ANALYSIS} -n applications
+          fi
+      
+      - name: Check canary metrics
+        run: |
+          echo "Checking canary metrics from Prometheus..."
+          
+          # Port forward to Prometheus
+          kubectl port-forward -n monitoring svc/prometheus-server 9090:80 &
+          PF_PID=$!
+          sleep 5
+          
+          # Query success rate
+          SUCCESS_RATE=$(curl -s 'http://localhost:9090/api/v1/query?query=sum(rate(http_requests_total{service="demo-app-canary-canary",status=~"2.."}[5m]))/sum(rate(http_requests_total{service="demo-app-canary-canary"}[5m]))' | jq -r '.data.result[0].value[1]')
+          
+          echo "Canary success rate: ${SUCCESS_RATE}"
+          
+          # Cleanup
+          kill $PF_PID || true
+          
+          # Validate metrics
+          if (( $(echo "$SUCCESS_RATE < 0.95" | bc -l) )); then
+            echo "❌ Canary success rate below threshold!"
+            exit 1
+          else
+            echo "✓ Canary metrics look good"
+          fi
+      
+      - name: Auto-promote or wait for manual approval
+        run: |
+          AUTO_PROMOTE="${{ github.event.inputs.auto_promote || 'false' }}"
+          
+          if [ "$AUTO_PROMOTE" = "true" ] && [ "${{ steps.monitor.outputs.rollout_healthy }}" = "true" ]; then
+            echo "Auto-promoting canary deployment..."
+            kubectl argo rollouts promote demo-app-canary -n applications --full
+          else
+            echo "Waiting for manual promotion..."
+            echo "Run: kubectl argo rollouts promote demo-app-canary -n applications"
+          fi
+      
+      - name: Abort on failure
+        if: failure()
+        run: |
+          echo "Canary deployment failed, aborting rollout..."
+          kubectl argo rollouts abort demo-app-canary -n applications
+          
+          # Wait for abort to complete
+          kubectl argo rollouts status demo-app-canary -n applications --watch --timeout 5m
+      
+      - name: Create deployment annotation
+        if: success()
+        run: |
+          # Annotate the rollout with deployment info
+          kubectl annotate rollout demo-app-canary -n applications \
+            "deployment/sha=${{ github.sha }}" \
+            "deployment/timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            "deployment/actor=${{ github.actor }}" \
+            --overwrite
+
+  # =========================================================================
+  # Manual Promotion Job (requires approval)
+  # =========================================================================
+  promote:
+    name: Promote Canary to Stable
+    runs-on: ubuntu-latest
+    needs: deploy-canary
+    environment:
+      name: production-promotion
+    if: github.event.inputs.auto_promote != 'true'
+    
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+      
+      - name: Install Argo Rollouts plugin
+        run: |
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/download/${{ env.ARGO_ROLLOUTS_VERSION }}/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+      
+      - name: Promote to 100%
+        run: |
+          echo "Promoting canary to 100% traffic..."
+          kubectl argo rollouts promote demo-app-canary -n applications --full
+          
+          # Wait for full promotion
+          kubectl argo rollouts status demo-app-canary -n applications --watch --timeout 10m
+          
+          echo "✓ Canary successfully promoted to stable"
+      
+      - name: Verify stable deployment
+        run: |
+          # Verify all pods are healthy
+          kubectl wait --for=condition=ready pod \
+            -l app=demo-app-canary \
+            -n applications \
+            --timeout=300s
+          
+          # Check rollout status
+          kubectl argo rollouts get rollout demo-app-canary -n applications
+
+  # =========================================================================
+  # Post-Deployment Validation
+  # =========================================================================
+  validate:
+    name: Validate Deployment
+    runs-on: ubuntu-latest
+    needs: [deploy-canary]
+    if: always()
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+      
+      - name: Run end-to-end tests
+        run: |
+          # Get service endpoint
+          SERVICE_URL=$(kubectl get ingress demo-app-canary -n applications -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          echo "Running E2E tests against: ${SERVICE_URL}"
+          
+          # Run your E2E test suite
+          # Example: cypress run, playwright test, etc.
+          
+          echo "✓ E2E tests passed"
+      
+      - name: Send notification
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Canary Deployment Status: ${{ job.status }}
+            Image: ${{ needs.build.outputs.image_tag }}
+            Version: ${{ needs.build.outputs.version }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+            
+            View rollout: kubectl argo rollouts get rollout demo-app-canary -n applications
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}

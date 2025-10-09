@@ -1,0 +1,67 @@
+# Cost-Optimized Terraform Variables
+# Copy to terraform.tfvars and apply to reduce monthly costs by 44%
+
+# ============================================================================
+# Cost Optimization Settings
+# ============================================================================
+
+# Use single NAT Gateway instead of 3 (saves ~$65/month)
+single_nat_gateway = true
+
+# Reduced node configuration (saves ~$139/month)
+node_groups = {
+  general = {
+    instance_types = ["t3.medium"]  # Smaller instance (was t3.large)
+    capacity_type  = "ON_DEMAND"
+    min_size       = 1
+    max_size       = 8
+    desired_size   = 2              # Reduced from 3
+    disk_size      = 30             # Reduced from 50GB
+    labels = {
+      role = "general"
+    }
+    taints = []
+  }
+  spot = {
+    instance_types = ["t3.medium", "t3a.medium"]  # Smaller instances
+    capacity_type  = "SPOT"
+    min_size       = 0
+    max_size       = 5
+    desired_size   = 1              # Reduced from 2
+    disk_size      = 30             # Reduced from 50GB
+    labels = {
+      role = "spot"
+    }
+    taints = [{
+      key    = "spot"
+      value  = "true"
+      effect = "NoSchedule"
+    }]
+  }
+}
+
+# Reduce log retention (saves ~$5/month)
+cloudwatch_log_group_retention_in_days = 7  # Reduced from 30
+
+# ============================================================================
+# Optional: Further Optimizations for Dev/Demo
+# ============================================================================
+
+# Disable CloudWatch logging (saves ~$10/month)
+# enable_cloudwatch_logs = false
+
+# Disable KMS encryption (saves ~$1/month)
+# enable_kms_encryption = false
+
+# Disable all cluster logging (saves ~$8/month)
+# cluster_enabled_log_types = []
+
+# ============================================================================
+# Cost Summary
+# ============================================================================
+
+# Current (default):     ~$474/month
+# With these settings:   ~$265/month
+# Savings:               ~$209/month (44% reduction)
+#
+# Apply with: terraform apply -var-file=terraform.tfvars.cost-optimized

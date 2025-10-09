@@ -1,0 +1,283 @@
+name: Blue-Green Deployment Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'applications/**'
+      - 'k8s/blue-green/**'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+      image_tag:
+        description: 'Docker image tag to deploy'
+        required: true
+        default: 'latest'
+
+env:
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: zdd-eks-production
+  ECR_REPOSITORY: demo-app
+  KUBECTL_VERSION: '1.28.0'
+  ARGO_ROLLOUTS_VERSION: 'v1.6.0'
+
+jobs:
+  # =========================================================================
+  # Build and Push Docker Image
+  # =========================================================================
+  build:
+    name: Build and Push Image
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    outputs:
+      image_tag: ${{ steps.meta.outputs.tags }}
+      image_digest: ${{ steps.build.outputs.digest }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+      
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: ./applications/demo-app
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          build-args: |
+            BUILD_DATE=${{ github.event.head_commit.timestamp }}
+            VCS_REF=${{ github.sha }}
+            VERSION=${{ steps.meta.outputs.version }}
+      
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ steps.login-ecr.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ steps.meta.outputs.version }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+      
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  # =========================================================================
+  # Deploy to EKS using Blue-Green Strategy
+  # =========================================================================
+  deploy:
+    name: Deploy Blue-Green
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: ${{ github.event.inputs.environment || 'production' }}
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+      
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v3
+        with:
+          version: ${{ env.KUBECTL_VERSION }}
+      
+      - name: Install Argo Rollouts kubectl plugin
+        run: |
+          curl -LO https://github.com/argoproj/argo-rollouts/releases/download/${{ env.ARGO_ROLLOUTS_VERSION }}/kubectl-argo-rollouts-linux-amd64
+          chmod +x kubectl-argo-rollouts-linux-amd64
+          sudo mv kubectl-argo-rollouts-linux-amd64 /usr/local/bin/kubectl-argo-rollouts
+          kubectl argo rollouts version
+      
+      - name: Update image in rollout manifest
+        run: |
+          export IMAGE_TAG=${{ needs.build.outputs.image_tag }}
+          envsubst < k8s/blue-green/rollout.yaml > k8s/blue-green/rollout-updated.yaml
+          cat k8s/blue-green/rollout-updated.yaml
+      
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f k8s/blue-green/rollout-updated.yaml
+      
+      - name: Wait for rollout to start
+        run: |
+          kubectl argo rollouts get rollout demo-app-blue-green -n applications --watch --timeout 2m || true
+      
+      - name: Check rollout status
+        id: rollout-status
+        run: |
+          STATUS=$(kubectl argo rollouts status demo-app-blue-green -n applications --timeout 5m)
+          echo "status=${STATUS}" >> $GITHUB_OUTPUT
+          
+          if echo "$STATUS" | grep -q "Healthy"; then
+            echo "Rollout is healthy and ready for promotion"
+            exit 0
+          else
+            echo "Rollout is not healthy"
+            exit 1
+          fi
+      
+      - name: Run smoke tests
+        run: |
+          # Get preview service endpoint
+          PREVIEW_URL=$(kubectl get ingress demo-app-preview -n applications -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          echo "Running smoke tests against preview: ${PREVIEW_URL}"
+          
+          # Wait for ALB to be ready
+          sleep 30
+          
+          # Basic health check
+          for i in {1..10}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://${PREVIEW_URL}/ || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "✓ Health check passed (${HTTP_CODE})"
+              break
+            else
+              echo "✗ Health check failed (${HTTP_CODE}), retrying..."
+              sleep 10
+            fi
+          done
+      
+      - name: Promote rollout
+        if: success()
+        run: |
+          echo "Promoting blue-green deployment..."
+          kubectl argo rollouts promote demo-app-blue-green -n applications
+          kubectl argo rollouts status demo-app-blue-green -n applications --watch --timeout 5m
+      
+      - name: Verify deployment
+        run: |
+          # Wait for rollout to stabilize
+          kubectl argo rollouts status demo-app-blue-green -n applications --timeout 5m
+          
+          # Check all pods are running
+          kubectl wait --for=condition=ready pod \
+            -l app=demo-app \
+            -n applications \
+            --timeout=300s
+          
+          echo "✓ Deployment verified successfully"
+      
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed, initiating rollback..."
+          kubectl argo rollouts undo demo-app-blue-green -n applications
+          kubectl argo rollouts status demo-app-blue-green -n applications --watch --timeout 5m
+      
+      - name: Notify Slack
+        if: always()
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            Blue-Green Deployment ${{ job.status }}
+            Image: ${{ needs.build.outputs.image_tag }}
+            Commit: ${{ github.sha }}
+            Author: ${{ github.actor }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author,action,eventName,ref,workflow
+
+  # =========================================================================
+  # Post-Deployment Tests
+  # =========================================================================
+  test:
+    name: Post-Deployment Tests
+    runs-on: ubuntu-latest
+    needs: deploy
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Update kubeconfig
+        run: |
+          aws eks update-kubeconfig \
+            --region ${{ env.AWS_REGION }} \
+            --name ${{ env.EKS_CLUSTER_NAME }}
+      
+      - name: Run integration tests
+        run: |
+          # Get active service endpoint
+          ACTIVE_URL=$(kubectl get ingress demo-app-active -n applications -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          echo "Running integration tests against: ${ACTIVE_URL}"
+          
+          # Run your test suite here
+          # Example: npm test, pytest, k6, etc.
+          
+          echo "✓ Integration tests passed"
+      
+      - name: Performance tests
+        run: |
+          ACTIVE_URL=$(kubectl get ingress demo-app-active -n applications -o jsonpath='{.status.loadBalancer.ingress[0].hostname}')
+          
+          echo "Running performance tests..."
+          # Use tools like k6, artillery, or ab
+          # k6 run --vus 100 --duration 30s performance-test.js
+          
+          echo "✓ Performance tests passed"

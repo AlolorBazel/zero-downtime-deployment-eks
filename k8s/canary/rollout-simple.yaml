@@ -1,0 +1,154 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: demo-app-canary
+  namespace: applications
+  labels:
+    app: demo-app-canary
+    strategy: canary
+spec:
+  replicas: 5
+  revisionHistoryLimit: 3
+  
+  selector:
+    matchLabels:
+      app: demo-app-canary
+  
+  template:
+    metadata:
+      labels:
+        app: demo-app-canary
+        version: stable
+    spec:
+      serviceAccountName: demo-app-canary
+      
+      containers:
+        - name: demo-app
+          image: 092382576187.dkr.ecr.us-east-1.amazonaws.com/demo-app:v1
+          imagePullPolicy: Always
+          
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 0
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+          
+          env:
+            - name: APP_VERSION
+              value: "stable"
+            - name: DEPLOYMENT_STRATEGY
+              value: "canary"
+  
+  strategy:
+    canary:
+      stableService: demo-app-canary-stable
+      canaryService: demo-app-canary-canary
+      
+      # Simplified steps - NO ANALYSIS (for demo/screenshots)
+      steps:
+        # Step 1: 10% traffic
+        - setWeight: 10
+        - pause:
+            duration: 2m
+        
+        # Step 2: 25% traffic
+        - setWeight: 25
+        - pause:
+            duration: 2m
+        
+        # Step 3: 50% traffic
+        - setWeight: 50
+        - pause:
+            duration: 2m
+        
+        # Step 4: 75% traffic
+        - setWeight: 75
+        - pause:
+            duration: 2m
+        
+        # Step 5: 100% - full promotion
+        - setWeight: 100
+        - pause: {}  # Manual promotion
+
+---
+# Services
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app-canary-stable
+  namespace: applications
+spec:
+  selector:
+    app: demo-app-canary
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app-canary-canary
+  namespace: applications
+spec:
+  selector:
+    app: demo-app-canary
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-app-canary-root
+  namespace: applications
+spec:
+  selector:
+    app: demo-app-canary
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+  type: LoadBalancer

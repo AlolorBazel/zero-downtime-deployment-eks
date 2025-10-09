@@ -1,0 +1,56 @@
+apiVersion: monitoring.coreos.com/v1
+kind: Prometheus
+metadata:
+  name: kube-prometheus-stack-prometheus
+  namespace: monitoring
+  labels:
+    app: kube-prometheus-stack-prometheus
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/instance: kube-prometheus-stack
+spec:
+  replicas: 1
+  
+  serviceAccountName: kube-prometheus-stack-prometheus
+  
+  # Service monitor selectors - match all
+  serviceMonitorSelector: {}
+  serviceMonitorNamespaceSelector: {}
+  
+  podMonitorSelector: {}
+  podMonitorNamespaceSelector: {}
+  
+  ruleSelector: {}
+  ruleNamespaceSelector: {}
+  
+  # Resources
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+  
+  # Retention (using emptyDir, so keep it short)
+  retention: 2h
+  
+  # Alertmanager configuration
+  alerting:
+    alertmanagers:
+      - namespace: monitoring
+        name: kube-prometheus-stack-alertmanager
+        port: http-web
+  
+  # External labels
+  externalLabels:
+    cluster: zero-downtime-eks
+    environment: demo
+  
+  # Security context
+  securityContext:
+    fsGroup: 2000
+    runAsNonRoot: true
+    runAsUser: 1000
+  
+  # Port name for service
+  portName: http-web

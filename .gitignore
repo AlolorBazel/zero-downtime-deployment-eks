@@ -1,0 +1,189 @@
+# ═══════════════════════════════════════════════════════
+# Zero-Downtime Deployment Project - Git Ignore
+# ═══════════════════════════════════════════════════════
+
+# ────────────────────────────────────────────────────────
+# Terraform
+# ────────────────────────────────────────────────────────
+*.tfstate
+*.tfstate.*
+*.tfstate.backup*
+.terraform/
+# Keep .terraform.lock.hcl for reproducibility (commented out)
+# .terraform.lock.hcl
+tfplan
+tfplan.*
+.terraform.tfstate.lock.info
+
+# Terraform variables (may contain secrets)
+terraform.tfvars
+*.auto.tfvars
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Crash log files
+crash.log
+crash.*.log
+
+# ────────────────────────────────────────────────────────
+# AWS & Kubernetes
+# ────────────────────────────────────────────────────────
+# kubectl configuration
+kubeconfig
+*.kubeconfig
+.kube/
+
+# AWS credentials
+.aws/
+aws-credentials
+credentials.csv
+
+# ────────────────────────────────────────────────────────
+# Environment Variables & Secrets
+# ────────────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.envrc
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+
+# ────────────────────────────────────────────────────────
+# IDE & Editor Files
+# ────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# ────────────────────────────────────────────────────────
+# Docker
+# ────────────────────────────────────────────────────────
+*.tar
+*.tar.gz
+
+# ────────────────────────────────────────────────────────
+# Helm
+# ────────────────────────────────────────────────────────
+charts/
+*.tgz
+Chart.lock
+
+# ────────────────────────────────────────────────────────
+# Temporary Files
+# ────────────────────────────────────────────────────────
+*.tmp
+*.bak
+*.backup
+*.old
+*.orig
+tmp/
+temp/
+.cache/
+
+# ────────────────────────────────────────────────────────
+# Logs
+# ────────────────────────────────────────────────────────
+*.log
+logs/
+*.log.*
+
+# ────────────────────────────────────────────────────────
+# Build Artifacts
+# ────────────────────────────────────────────────────────
+dist/
+build/
+target/
+out/
+
+# ────────────────────────────────────────────────────────
+# Python
+# ────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg
+*.egg-info/
+.pytest_cache/
+
+# ────────────────────────────────────────────────────────
+# Node.js (if used for tooling)
+# ────────────────────────────────────────────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ────────────────────────────────────────────────────────
+# OS Generated
+# ────────────────────────────────────────────────────────
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# ────────────────────────────────────────────────────────
+# Backup & Cleanup Scripts
+# ────────────────────────────────────────────────────────
+cleanup-*.sh
+*.backup.*
+README.md.backup
+*.pem
+*.key
+*.crt
+
+# Build artifacts
+dist/
+build/
+target/
+*.zip
+*.tar.gz
+
+# Node modules (if using any JS tools)
+node_modules/
+package-lock.json
+yarn.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+ENV/
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# AWS
+.aws/
+credentials
+
+# Documentation build
+docs/_build/
+site/
