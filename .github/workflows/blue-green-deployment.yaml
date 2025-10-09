@@ -1,15 +1,17 @@
 name: Blue-Green Deployment Pipeline
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'applications/**'
-      - 'k8s/blue-green/**'
-  pull_request:
-    branches:
-      - main
+  # Disabled automatic triggers - only manual dispatch
+  # Uncomment when AWS infrastructure is deployed
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'applications/**'
+  #     - 'k8s/blue-green/**'
+  # pull_request:
+  #   branches:
+  #     - main
   workflow_dispatch:
     inputs:
       environment:

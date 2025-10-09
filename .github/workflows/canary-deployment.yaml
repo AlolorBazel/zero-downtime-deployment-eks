@@ -1,15 +1,17 @@
 name: Canary Deployment Pipeline
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'applications/**'
-      - 'k8s/canary/**'
-  pull_request:
-    branches:
-      - main
+  # Disabled automatic triggers - only manual dispatch
+  # Uncomment when AWS infrastructure is deployed
+  # push:
+  #   branches:
+  #     - main
+  #   paths:
+  #     - 'applications/**'
+  #     - 'k8s/canary/**'
+  # pull_request:
+  #   branches:
+  #     - main
   workflow_dispatch:
     inputs:
       environment:

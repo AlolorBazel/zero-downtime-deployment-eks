@@ -187,3 +187,5 @@ credentials
 # Documentation build
 docs/_build/
 site/
+GITHUB_SETUP.md
+PUBLICATION_SUCCESS.md
